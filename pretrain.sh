@@ -5,7 +5,7 @@ output=$name
 
 PYTHONPATH=$PYTHONPATH:./src \
 python -m torch.distributed.launch \
-    --nproc_per_node=$1 \
+    --nproc_per_node=1 \
     --master_port 1178\
     src/pretrain.py \
         --distributed --multiGPU \
