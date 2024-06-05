@@ -9,6 +9,8 @@ from torch.utils.data.distributed import DistributedSampler
 from transformers import T5Tokenizer
 
 
+
+
 class MIND_Dataset(Dataset):
     def __init__(self, all_tasks, task_list, tokenizer, args, sample_numbers, mode ='train', split = 'MIND', rating_augment = False, sample_type = 'random'):
 
@@ -26,12 +28,14 @@ class MIND_Dataset(Dataset):
         if self.mode == 'train':
             # {uid: [combined infor history]}
             self.his = pickle.load(
-                open(os.path.join('./train_infor_his'), "rb"))
-
-            # {(uid, pview, nview)]}
+                open(os.path.join('./data/train/train_infor_his'), "rb"))
+  
+            # [(uid, pview, nview)]
             self.interaction = pickle.load(
-                open(os.path.join('./train_interaction'), "rb"))
+                open(os.path.join('./data/train/train_interaction'), "rb"))[:100]
    
+            self.infor = pickle.load(
+                open(os.path.join('./data/news_infor'), "rb"))
            
         else:
             raise NotImplementedError
@@ -71,8 +75,11 @@ class MIND_Dataset(Dataset):
         if task_name == 'sequential':
 
             user = self.interaction[datum_idx][0]
-            pos_infor = self.interaction[datum_idx][1]
-            neg_infor = self.interaction[datum_idx][2]
+            pos_id = self.interaction[datum_idx][1]
+            pos_infor = self.infor[pos_id]
+            
+            neg_id = self.interaction[datum_idx][2]
+            neg_infor = self.infor[neg_id]
      
             # history
             history = self.his[user]
@@ -284,16 +291,15 @@ class val_Dataset(Dataset):
         self.sample_type = sample_type
         self.mode = mode
 
-        if self.mode == 'val':
+        if self.mode == 'val': # also for test
             self.his = pickle.load(
-                open(os.path.join('data/val/history'), "rb"))
+                open(os.path.join('./data/val/val_id_history'), "rb"))
   
             self.interaction = pickle.load(
-                open(os.path.join('data/val/interaction'), "rb"))
+                open(os.path.join('./data/val/val_interaction'), "rb"))[:100]
              
             self.infor = pickle.load(
-                open(os.path.join('data/val/news_infor'), "rb"))
-             
+                open(os.path.join('./data/news_infor'), "rb"))
         
         else:
             raise NotImplementedError
