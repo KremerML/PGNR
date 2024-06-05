@@ -9,6 +9,8 @@ from torch.utils.data.distributed import DistributedSampler
 from transformers import T5Tokenizer
 
 
+
+
 class MIND_Dataset(Dataset):
     def __init__(self, all_tasks, task_list, tokenizer, args, sample_numbers, mode ='train', split = 'MIND', rating_augment = False, sample_type = 'random'):
 
@@ -27,7 +29,6 @@ class MIND_Dataset(Dataset):
             # {uid: [combined infor history]}
             self.his = pickle.load(
                 open(os.path.join('./data/train/train_infor_his'), "rb"))
-
             # [(uid, pview, nview)]
             self.interaction = pickle.load(
                 open(os.path.join('./data/train/train_interaction'), "rb"))[:100]
