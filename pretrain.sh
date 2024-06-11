@@ -1,4 +1,4 @@
-export CUDA_VISIBLE_DEVICES=0,4,5,6
+export CUDA_VISIBLE_DEVICES=0
 name=MIND
 
 output=$name
@@ -8,7 +8,6 @@ python -m torch.distributed.launch \
     --nproc_per_node=1 \
     --master_port 1178\
     src/pretrain.py \
-        --distributed --multiGPU \
         --seed 42 \
         --train MIND \
         --valid MIND \
@@ -17,7 +16,7 @@ python -m torch.distributed.launch \
         --optim adamw \
         --warmup_ratio 0.05 \
         --lr 1e-3 \
-        --num_workers 16 \
+        --num_workers 4 \
         --clip_grad_norm 1.0 \
         --losses 'sequential' \
         --backbone 't5-small' \
