@@ -164,10 +164,3 @@ class P5Pretraining(P5):
         prob_yes = prob[:, 4273].tolist()
 
         return user_id, impress_id, item_id, target_text, prob_yes, generated_sents
-   
-
-    
-
-
-
-
