@@ -53,7 +53,6 @@ class EarlyStopping:
 class Trainer(TrainerBase):
     def __init__(self, args, train_loader=None, val_loader=None, test_loader=None, train=True):
         super().__init__(args, train_loader, val_loader, test_loader, train)
-        assert args.whole_word_embed
 
         from pretrain_model import P5Pretraining
         model_kwargs = {}
@@ -70,12 +69,14 @@ class Trainer(TrainerBase):
             ckpt_path = args.load + '.pth'
             self.load_checkpoint(ckpt_path)
 
-        if self.args.from_scratch:
+        if args.from_scratch:
             logging.info('Initializing weights from scratch')
             self.init_weights()
 
-        logging.info(f'Model Launching at GPU {self.args.gpu}')
+        logging.info(f'Model Launching at GPU {args.gpu}')
         self.model = self.model.to(args.gpu)
+
+        super().__init__(args, train_loader, val_loader, test_loader, train)
 
         if train:
             self.optim, self.lr_scheduler = self.create_optimizer_and_scheduler()
@@ -95,20 +96,29 @@ class Trainer(TrainerBase):
             epoch_loss = 0
 
             for step_i, batch in enumerate(self.train_loader):
-                with torch.cuda.amp.autocast(enabled=self.args.fp16):
+                if self.args.fp16:
+                    with torch.cuda.amp.autocast(enabled=self.args.fp16):
+                        results = self.model.train_step(batch)
+                    loss = results['loss']
+                    self.scaler.scale(loss).backward()
+                    
+                    if self.args.clip_grad_norm > 0:
+                        self.scaler.unscale_(self.optim)
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad_norm)
+                    
+                    self.scaler.step(self.optim)
+                    self.scaler.update()
+                else:
                     results = self.model.train_step(batch)
-                loss = results['loss']
+                    loss = results['loss']
+                    loss.backward()
+
+                    if self.args.clip_grad_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad_norm)
+                    
+                    self.optim.step()
                 
-                self.scaler.scale(loss).backward()
-
-                if self.args.clip_grad_norm > 0:
-                    self.scaler.unscale_(self.optim)
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad_norm)
-
-                self.scaler.step(self.optim)
-                self.scaler.update()
                 self.optim.zero_grad()
-                
                 epoch_loss += loss.item()
                 global_step += 1
 
@@ -132,6 +142,7 @@ class Trainer(TrainerBase):
 
         logging.info(f"Finished Epoch {epoch + 1}/{self.args.epoch}")
 
+
     def evaluate_epoch(self, epoch):
         self.model.eval()
         val_loss = 0
@@ -142,23 +153,28 @@ class Trainer(TrainerBase):
             pbar = tqdm(total=len(self.val_loader), desc=f"Evaluating Epoch {epoch + 1}")
 
             for step_i, batch in enumerate(self.val_loader):
-                with torch.cuda.amp.autocast(enabled=self.args.fp16):
-                    results = self.model.valid_step(batch)
-                loss = results['loss']
-                val_loss += loss.item()
-                loss_meter.update(loss.item())
+                try:
+                    with torch.cuda.amp.autocast(enabled=self.args.fp16):
+                        results = self.model.valid_step(batch)
+                    loss = results['loss']
+                    val_loss += loss.item()
+                    loss_meter.update(loss.item())
 
-                if step_i % 100 == 0:
-                    logging.info(f"Validation Step {step_i}/{len(self.val_loader)}, Loss: {loss.item():.4f}, Running Average Loss: {loss_meter.val:.4f}")
-                
-                pbar.update(1)
+                    if step_i % 100 == 0:
+                        logging.info(f"Validation Step {step_i}/{len(self.val_loader)}, Loss: {loss.item():.4f}, Running Average Loss: {loss_meter.val:.4f}")
+
+                    pbar.update(1)
+                except KeyError as e:
+                    logging.error(f"KeyError during validation at step {step_i}: {e}")
+                    continue
 
             pbar.close()
-        
+
         avg_val_loss = val_loss / len(self.val_loader)
         logging.info(f"Epoch {epoch + 1} Validation Loss: {avg_val_loss:.4f}")
 
         return avg_val_loss
+    
 
 def initialize_distributed_training(args):
     if args.distributed:
@@ -174,7 +190,7 @@ def build_data_loader(args, gpu, mode, task_list, sample_numbers):
         sample_numbers,
         split=getattr(args, mode),
         mode=mode,
-        batch_size=getattr(args, f"{mode}_batch_size"),
+        batch_size=args.batch_size if mode == 'train' else args.val_batch_size,
         workers=args.num_workers,
         distributed=args.distributed
     )
