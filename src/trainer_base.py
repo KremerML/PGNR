@@ -26,7 +26,6 @@ else:
     _use_native_amp = True
 
 
-
 class TrainerBase(object):
     def __init__(self, args, train_loader=None, val_loader=None, test_loader=None, train=True):
         self.args = args
@@ -45,6 +44,14 @@ class TrainerBase(object):
 
         if not self.verbose:
             set_global_logging_level(logging.ERROR, ["transformers"])
+
+        # Assume model is set by subclass before calling super().__init__()
+        if hasattr(self, 'model') and train:
+            self.optim, self.lr_scheduler = self.create_optimizer_and_scheduler()
+            if self.args.fp16:
+                self.scaler = torch.cuda.amp.GradScaler()
+            else:
+                self.scaler = None
 
     def create_config(self):
         from transformers import T5Config
