@@ -9,6 +9,8 @@ import logging
 
 from pprint import pprint
 from utils import load_state_dict, set_global_logging_level
+from transformers.optimization import AdamW, get_cosine_schedule_with_warmup, get_linear_schedule_with_warmup
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 
 proj_dir = Path(__file__).resolve().parent.parent
@@ -33,6 +35,7 @@ class TrainerBase(object):
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.test_loader = test_loader
+        self.use_plateau_lr = True
 
         self.verbose = True
         if self.args.distributed:
@@ -100,48 +103,29 @@ class TrainerBase(object):
 
         return tokenizer
 
+    
+
     def create_optimizer_and_scheduler(self):
-        if self.verbose:
-            print('Building Optimizer')
+        print('Building Optimizer') if self.verbose else None
+        no_decay = ["bias", "LayerNorm.weight"]
+        optimizer_grouped_parameters = [
+            {"params": [p for n, p in self.model.named_parameters() if not any(nd in n for nd in no_decay)],
+            "weight_decay": self.args.weight_decay},
+            {"params": [p for n, p in self.model.named_parameters() if any(nd in n for nd in no_decay)],
+            "weight_decay": 0.0}
+        ]
+        optim = AdamW(optimizer_grouped_parameters, lr=self.args.lr, eps=self.args.adam_eps)
 
-        lr_scheduler = None
-
-        if 'adamw' in self.args.optim:
-            from transformers.optimization import AdamW, get_linear_schedule_with_warmup
-
+        if self.use_plateau_lr:
+            lr_scheduler = ReduceLROnPlateau(optim, mode='min', factor=0.1, patience=10)
+        else:
             batch_per_epoch = len(self.train_loader)
             t_total = batch_per_epoch // self.args.gradient_accumulation_steps * self.args.epoch
-            warmup_ratio = self.args.warmup_ratio
-            warmup_iters = int(t_total * warmup_ratio)
-            
-            if self.verbose:
-                print("Batch per epoch: %d" % batch_per_epoch)
-                print("Total Iters: %d" % t_total)
-                print('Warmup ratio:', warmup_ratio)
-                print("Warm up Iters: %d" % warmup_iters)
-
-            no_decay = ["bias", "LayerNorm.weight"]
-            optimizer_grouped_parameters = [
-                {
-                    "params": [p for n, p in self.model.named_parameters() if not any(nd in n for nd in no_decay)],
-                    "weight_decay": self.args.weight_decay,
-                },
-                {
-                    "params": [p for n, p in self.model.named_parameters() if any(nd in n for nd in no_decay)],
-                    "weight_decay": 0.0,
-                },
-            ]
-
-            optim = AdamW(optimizer_grouped_parameters,
-                          lr=self.args.lr, eps=self.args.adam_eps)
-            lr_scheduler = get_linear_schedule_with_warmup(
-                optim, warmup_iters, t_total)
-
-        else:
-            optim = self.args.optimizer(
-                list(self.model.parameters()), self.args.lr)
-
+            warmup_iters = int(t_total * self.args.warmup_ratio)
+            lr_scheduler = get_linear_schedule_with_warmup(optim, warmup_iters, t_total)
+        
         return optim, lr_scheduler
+
 
     def load_checkpoint(self, ckpt_path):
         state_dict = load_state_dict(ckpt_path, 'cpu')

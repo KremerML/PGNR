@@ -63,6 +63,7 @@ class BaseMINDDataset(Dataset):
         loss_weights = torch.ones(B, dtype=torch.float)
 
         tasks, source_texts, tokenized_texts, target_texts = [], [], [], []
+        user_ids, item_ids, impress_ids = [], [], []
 
         for i, entry in enumerate(batch):
             for j in range(2):
@@ -81,6 +82,10 @@ class BaseMINDDataset(Dataset):
                 if f'loss_weight_{j+1}' in entry:
                     loss_weights[i + len(batch) * j] = entry[f'loss_weight_{j+1}'] / max(entry[f'target_length_{j+1}'], 1)
 
+                user_ids.append(entry.get('user_id', 'default_user'))  # Fallback to 'default_user' if missing
+                item_ids.extend(entry.get('item_id', []))  # Extend to handle lists of item_ids
+                impress_ids.extend(entry.get('impress_id', []))  # Extend to handle lists of impress_ids
+
         word_mask = target_ids != self.tokenizer.pad_token_id
         target_ids[~word_mask] = -100
 
@@ -91,8 +96,56 @@ class BaseMINDDataset(Dataset):
         batch_entry['whole_word_ids'] = whole_word_ids
         batch_entry['target_ids'] = target_ids
         batch_entry['loss_weights'] = loss_weights
+        batch_entry['user_id'] = user_ids
+        batch_entry['item_id'] = item_ids
+        batch_entry['impress_id'] = impress_ids
 
         return batch_entry
+
+    # def collate_fn(self, batch):
+    #     args = self.args
+    #     batch_entry = {}
+    #     B = len(batch) * 2
+
+    #     max_input_length = max(entry[f'input_length_{i+1}'] for entry in batch for i in range(2))
+    #     max_target_length = max(entry[f'target_length_{i+1}'] for entry in batch for i in range(2))
+
+    #     input_ids = torch.ones(B, max_input_length, dtype=torch.long) * self.tokenizer.pad_token_id
+    #     whole_word_ids = torch.ones(B, max_input_length, dtype=torch.long) * self.tokenizer.pad_token_id
+    #     target_ids = torch.ones(B, max_target_length, dtype=torch.long) * self.tokenizer.pad_token_id
+    #     loss_weights = torch.ones(B, dtype=torch.float)
+
+    #     tasks, source_texts, tokenized_texts, target_texts = [], [], [], []
+
+    #     for i, entry in enumerate(batch):
+    #         for j in range(2):
+    #             input_ids[i + len(batch) * j, :entry[f'input_length_{j+1}']] = entry[f'input_ids_{j+1}']
+    #             whole_word_ids[i + len(batch) * j, :entry[f'input_length_{j+1}']] = entry[f'whole_word_ids_{j+1}']
+    #             target_ids[i + len(batch) * j, :entry[f'target_length_{j+1}']] = entry[f'target_ids_{j+1}']
+
+    #             if f'task' in entry:
+    #                 tasks.append(entry['task'])
+    #             if f'source_text_{j+1}' in entry:
+    #                 source_texts.append(entry[f'source_text_{j+1}'])
+    #             if f'tokenized_text_{j+1}' in entry:
+    #                 tokenized_texts.append(entry[f'tokenized_text_{j+1}'])
+    #             if f'target_text_{j+1}' in entry:
+    #                 target_texts.append(entry[f'target_text_{j+1}'])
+    #             if f'loss_weight_{j+1}' in entry:
+    #                 loss_weights[i + len(batch) * j] = entry[f'loss_weight_{j+1}'] / max(entry[f'target_length_{j+1}'], 1)
+
+    #     word_mask = target_ids != self.tokenizer.pad_token_id
+    #     target_ids[~word_mask] = -100
+
+    #     batch_entry['task'] = tasks * 2
+    #     batch_entry['source_text'] = source_texts
+    #     batch_entry['target_text'] = target_texts
+    #     batch_entry['input_ids'] = input_ids
+    #     batch_entry['whole_word_ids'] = whole_word_ids
+    #     batch_entry['target_ids'] = target_ids
+    #     batch_entry['loss_weights'] = loss_weights
+
+    #     return batch_entry
 
 
 class MINDDataset(BaseMINDDataset):
@@ -113,49 +166,48 @@ class MINDDataset(BaseMINDDataset):
             raise FileNotFoundError(f"File {file_path} not found")
         with open(file_path, 'rb') as f:
             return pickle.load(f)
-
+        
     def __getitem__(self, idx):
         datum_info_idx = self.datum_info[idx]
-        if len(datum_info_idx) == 3:
-            task_name = datum_info_idx[1]
-            datum_idx = datum_info_idx[2]
-        else:
+        if len(datum_info_idx) != 3:
             raise NotImplementedError("Datum info index format not recognized")
 
-        if task_name == 'sequential':
-            # Determine whether the mode is 'train' or 'valid'
-            if self.mode == 'train':
-                user, pos_id, neg_id = self.interaction[datum_idx][:3]
-            elif self.mode == 'valid':
-                # In validation mode, the interaction tuple includes the label, so we need to handle it accordingly
-                user, _, article_id, label = self.interaction[datum_idx]
-                if label == 'yes':
-                    pos_id = article_id
-                    neg_id = self.get_negative_id(user, pos_id)  # Function to get a valid negative ID
-                else:
-                    neg_id = article_id
-                    pos_id = self.get_positive_id(user, neg_id)  # Function to get a valid positive ID
-            
-            history = self.his[user][-self.args.history_length:]
-            
-            # Ensure pos_id and neg_id are strings
-            pos_id = str(pos_id)
-            neg_id = str(neg_id)
-            
-            if pos_id not in self.infor:
-                raise KeyError(f"pos_id {pos_id} not found in self.infor")
-            if neg_id not in self.infor:
-                raise KeyError(f"neg_id {neg_id} not found in self.infor")
-            
-            pos_infor = self.infor[pos_id]
-            neg_infor = self.infor[neg_id]
+        task_name = datum_info_idx[1]
+        datum_idx = datum_info_idx[2]
 
-            task_template = self.get_task_template(task_name)
-            source_1, target_1, source_2, target_2 = self.construct_task(history, pos_infor, neg_infor, task_template)
-        else:
+        if task_name != 'sequential':
             raise NotImplementedError(f"Task {task_name} not implemented")
 
-        return self.tokenize_and_encode(source_1, target_1, source_2, target_2)
+        user, pos_id, neg_id = self.extract_interaction_info(datum_idx)
+        history = self.his[user][-self.args.history_length:]
+        pos_infor, neg_infor = self.get_item_information(pos_id, neg_id)
+
+        task_template = self.get_task_template(task_name)
+        source_1, target_1, source_2, target_2 = self.construct_task(history, pos_infor, neg_infor, task_template)
+
+        tokenized_and_encoded = self.tokenize_and_encode(source_1, target_1, source_2, target_2)
+        tokenized_and_encoded.update({
+            'user_id': user,
+            'item_id': [pos_id, neg_id],
+            'impress_id': [1, 2]  # Placeholder, adjust as necessary
+        })
+        print(f"Generated data keys: {tokenized_and_encoded.keys()}")
+        return tokenized_and_encoded
+
+    def extract_interaction_info(self, datum_idx):
+        if self.mode == 'train':
+            return self.interaction[datum_idx][:3]
+        elif self.mode == 'valid':
+            user, _, article_id, label = self.interaction[datum_idx]
+            if label == 'yes':
+                return user, article_id, self.get_negative_id(user, article_id)
+            else:
+                return user, self.get_positive_id(user, article_id), article_id
+
+    def get_item_information(self, pos_id, neg_id):
+        pos_infor = self.infor[str(pos_id)]
+        neg_infor = self.infor[str(neg_id)]
+        return pos_infor, neg_infor
 
     def get_negative_id(self, user, pos_id):
         # Implement logic to get a valid negative ID for the user
