@@ -44,6 +44,7 @@ def evaluate(model, test_loader):
     results = []
     for step, batch in enumerate(test_loader):
         # Ensure batch data is in the correct format
+        print(f"Batch keys at step {step}: {batch.keys()}")
         if isinstance(batch, (list, tuple)):
             batch = batch[0]  # Assuming batch is a list of dictionaries
 
