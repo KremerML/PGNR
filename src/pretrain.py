@@ -30,7 +30,7 @@ else:
     from torch.cuda.amp import autocast
 
 class EarlyStopping:
-    def __init__(self, patience=5):
+    def __init__(self, patience=10):
         self.patience = patience
         self.counter = 0
         self.best_loss = np.Inf
